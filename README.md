@@ -1,2 +1,2 @@
 # omics
-This is the script used for water buffalo resequencing and transcriptome data analysis
+WGS and Transcriptome analysis of of Haizi and Xuyi mountain water buffalo population.
