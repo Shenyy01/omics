@@ -1,0 +1,14 @@
+#1 The genome was indexed using the software Hisat2
+hisat2-build -p 2 GCF_019923935.1_NDDB_SH_1_genomic.fna water_buffalo_genome
+
+#2 Generate sam file
+hisat2 --new-summary -p 2 -x water_buffalo_genome -1 ./xxx_1.clean.fq.gz -2 ./xxx_2.clean.fq.gz -S xxx_2.sam --rna-strandness R 1>xxx_2.log 2>&1
+
+#3 Sam to bam
+samtools sort -o xxx_1.bam xxx_1.sam
+
+#4 Build an index for bam
+samtools index xxx_1.bam
+
+#5 Quantitative analysis of gene expression
+featureCounts -T 40 -a ref_genome/water_buffalo/GCF_019923935.1_NDDB_SH_1_genomic.gtf -p -o xxx_Blood.count all_of_your_bamfile.bam 

@@ -1,0 +1,148 @@
+options(BioC_mirror="https://mirrors.tuna.tsinghua.edu.cn/bioconductor/")
+options("repos" = c(CRAN="http://mirrors.cloud.tencent.com/CRAN/")) 
+options(download.file.method = 'libcurl')
+options(url.method='libcurl')
+
+library(GenomeInfoDb)
+library(RCurl)
+library(matrixStats)
+library(DESeq2)
+library(ggplot2)
+library(clusterProfiler)
+library(biomaRt)
+library(ReactomePA)
+library(DOSE)
+library(KEGGREST)
+library(org.Bt.eg.db)
+library(pheatmap)
+library(genefilter)
+library(RColorBrewer)
+library(GO.db)
+library(topGO)
+library(dplyr)
+library(gage)
+library(ggsci)
+library(R.utils)
+library(readr)
+library(BiocManager)
+library(AnnotationHub)
+hub <- AnnotationHub()
+
+Bb.db <- hub[['AH107627']]
+saveDb(Bb.db, "Bubalus_bubalis-AH66950.sqlite")
+Bb.db <- loadDb("Bubalus_bubalis-AH66950.sqlite")
+
+countdata <- read.table("HZ_Blood.count", header = T,row.names = 1)
+colnames(countdata) <- gsub(".bam", "", colnames(countdata), fixed = T)
+colnames(countdata) <- gsub("../02_alignment/HZ_XY/HZ_", "", colnames(countdata), fixed = T)
+countData_HZ_Blood <- countdata[c(6:ncol(countdata))]
+countData_HZ_Blood <- countData_HZ_Blood[-c(1,5)]
+View(countData_HZ_Blood)
+condition <- factor(c("xxx_Blood","xxx_Blood","xxx_Blood",,,,,"xxx_Blood"))
+
+#TPM
+kb <- countdata$Length / 1000
+tpm_countdata <- countdata[,6:ncol(countdata)]
+rpk <- tpm_countdata / kb
+tpm <- t(t(rpk)/colSums(rpk) * 1000000)
+write.table(tpm,file="HZ_Muslce_TPM.tsv",sep="\t",quote=F)
+
+#DESEQ2
+dds_HZ_Blood <- DESeqDataSetFromMatrix(countData_HZ_Blood, DataFrame(condition), design= ~ condition)
+keep = rowSums(counts(dds_HZ_Blood)) >= 10
+dds= dds_HZ_Blood[keep,]
+head(dds)
+dds_HZ_Blood <- DESeq(dds)
+resultsNames(dds_HZ_Blood)
+res_HZ_Blood <- results(dds_HZ_Blood, contrast = c('condition', 'HW_Blood', 'LW_Blood'))
+summary(res_HZ_Blood)
+p <- plotMA(res_HZ_Blood)
+ggsave( 'HZ_Blood.png',p,dpi=500,width = 250,height = 250,limitsize = F,units = 'mm')
+res_HZ_Blood <- res_HZ_Blood[order(res_HZ_Blood$pvalue),]
+DE_HZ_Blood_list <-subset(res_HZ_Blood,
+                                padj < 0.05 
+                                & (log2FoldChange > 1 | log2FoldChange < -1))
+DE_HZ_Blood_list <- row.names(DE_HZ_Blood_list)
+resdata_HZ_Blood <-  merge(as.data.frame(res_HZ_Blood),as.data.frame(counts(dds_HZ_Blood,normalize=TRUE)),
+                                 by="row.names",sort=FALSE)
+resdata_HZ_Blood_HW_LW$Sig <- ifelse(resdata_HZ_Blood$padj<0.05 & abs(resdata_HZ_Blood_HW_LW$log2FoldChange)>= 1,ifelse(resdata_HZ_Blood$log2FoldChange > 1,'up','down'),'NA')
+fixed_string <- "NA"
+resdata_HZ_Blood_without_NA <- resdata_HZ_Blood_HW_LW[!grepl(fixed_string, resdata_HZ_Blood$Sig), ]
+resdata_HZ_Blood_without_NA <- na.omit(resdata_HZ_Blood_without_NA)
+write.csv(resdata_HZ_Blood_without_NA, "HZ_Muslce_DEG.csv") #write DESeq2 results
+
+#~PCA plot
+rlog_results = rlog(dds, blind = TRUE)
+pca_results <- prcomp(t(assay(rlog_results)), scale = TRUE)
+pca_df <- as.data.frame(pca_results$x)
+pca_df$group <- c("xxx_Blood","xxx_Blood","xxx_Blood", , ,"xxx_Blood","xxx_Blood")
+pca_centers <- pca_df %>%
+  group_by(group) %>%
+  summarize(center_PC1 = mean(PC1),
+            center_PC2 = mean(PC2))
+p <- ggplot(pca_df, aes(x = PC1, y = PC2, color = group)) +
+  geom_point() +
+  stat_ellipse(geom = "polygon", alpha = 0.2, aes(fill = group), level = 0.75) +
+  labs(title = "PCA Plot with Group Ellipse Boundaries",
+       x = "Principal Component 1",
+       y = "Principal Component 2")
+ggsave( 'HZ_Blood_PCA.png',p,dpi=500,width = 250,height = 250,limitsize = F,units = 'mm')
+
+#Volcano map
+upregulated_genes <- sum(resdata_HZ_Blood_HW_LW_without_NA$log2FoldChange > 1)  
+downregulated_genes <- sum(resdata_HZ_Blood_HW_LW_without_NA$log2FoldChange < -1) 
+fc_cutoff <- log2(2) #log2 fold change cut off for Volcano plot
+p_cutoff <- 0.05 #padj cut off for Volcano plot
+resdata_HZ_Blood <- na.omit(resdata_HZ_Blood_HW_LW)
+p <- ggplot(resdata_HZ_Blood, aes(x = log2FoldChange, y = -log10(padj))) +
+  geom_point(aes(color = Sig), alpha = 0.5, size = 5) + 
+  scale_color_manual(values = c('blue','gray', 'red'))+
+  geom_hline(yintercept = -log10(p_cutoff), linetype = 'dashed', alpha = 0.6)+
+  geom_vline(xintercept = c(fc_cutoff, -fc_cutoff), linetype = 'dashed', alpha = 0.6)+
+  geom_text_repel(data = subset(resdata_HZ_Blood_HW_LW, log2FoldChange>1 & padj<0.05 |log2FoldChange < -1 & padj<0.05), aes(label = Row.names),nudge_x = 0.2,nudge_y=0.2,hjust = 0, vjust = 0,color = "black", show.legend = F, direction="both", parse = F,size = 4, force = 40,max.overlaps = 400) +
+  labs(x = 'Log2FoldChange', y = '-log10(Padj)', caption = paste( "\n Upregulated: ", upregulated_genes,  "\n Downregulated: ",downregulated_genes)) +
+  theme_minimal() +
+  theme(axis.text = element_text(size = 20),   
+        plot.caption = element_text(hjust = 1, vjust = 1))  
+ggsave( 'HZ_Blood_removed.png',p,dpi=500,width = 250,height = 250,limitsize = F,units = 'mm')
+
+#heatmap
+res_HZ_Blood <- res_HZ_Blood[order(res_HZ_Blood$padj),]
+DEG <- as.data.frame(res_HZ_Blood)
+DEG <- na.omit(DEG)
+choose_gene <- head(rownames(DEG),50)
+choose_matrix <- countData_HZ_Blood[choose_gene,]
+choose_matrix <- rev(choose_matrix)
+choose_matrix <- t(scale(t(choose_matrix)))
+choose_matrix <- subset(choose_matrix)
+p <- pheatmap(choose_matrix, fontsize = 6, cluster_cols = T, show_rownames = T, show_colnames = T, reorder_cols = F)
+ggsave('HZ_Blood_pheatmap.png',p,dpi=500,width = 250,height = 250,limitsize = F,units = 'mm')
+
+#KEGG
+DE_HZ_Blood_ID<-bitr(DE_HZ_Blood_list,fromType = 'SYMBOL',toType = 'ENTREZID',OrgDb = Bb.db)
+kegg_HZ_Blood<-enrichKEGG(DE_HZ_Blood_ID$ENTREZID,
+                                organism ='bbub',
+                                pvalueCutoff = 0.05,
+                                qvalueCutoff = 0.5,
+                                pAdjustMethod = 'none' )
+
+kegg_HZ_Blood_result <- setReadable(kegg_HZ_Blood_HW_LW,OrgDb = Bb.db,keyType = 'ENTREZID')
+kegg_HZ_Blood_result <- as.data.frame(kegg_HZ_Blood_HW_LW_result)
+kegg_HZ_Blood_result$Description <- gsub(" - Bubalus bubalis (water buffalo)","",kegg_HZ_Blood_result$Description,fixed = T)
+p<-dotplot(kegg_HZ_Blood, font.size=30)
+ggsave('kegg_HZ_Blood.png',p,dpi=500,width = 400,height = 300,limitsize = F,units = 'mm')
+
+#go
+go_HZ_Blood_HW_LW <- enrichGO(gene = DE_HZ_Blood_ID$ENTREZID,OrgDb = Bb.db,
+                              pvalueCutoff = 0.05,
+                              qvalueCutoff = 1,
+                              readable = TRUE,
+                              ont = 'ALL',
+                              pAdjustMethod = 'none')
+go_HZ_Blood_result <- as.data.frame(go_HZ_Blood)
+go_HZ_Blood_result$Description <- factor(go_HZ_Blood_result$Description, levels = rev(go_HZ_Blood_result$Description))
+p <- barplot(go_HZ_Blood_result, showCategory = 10,font.size = 40)
+ggsave('go_Pi_peak_pre_result.png',p,width = 20,height = 15,dpi = 500)
+library(writexl)
+writexl::write_xlsx(go_Pi_peak_pre_result,path = 'go_Pi_peak_pre.xlsx')
+writexl::write_xlsx(kegg_HZ_Blood_HW_LW_result,path = 'kegg_HZ_Blood_HW_LW.xlsx')

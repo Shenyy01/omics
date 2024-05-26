@@ -1,0 +1,14 @@
+#1 BWA indexes the reference genome
+bwa index -a bwtsw GCF_019923935.1_NDDB_SH_1_genomic.fna 
+
+#2 Get cleanreads ready and speed up production with Nvidia fastq2bam
+docker run --rm --gpus all --volume /mnt/data:/workdir --volume /mnt/data/WGS/bam_files:/outputdir -w /workdir nvcr.io/nvidia/clara/clara-parabricks:4.1.1-1 pbrun fq2bam --ref /workdir/ref_genome/buffalo/GCF_019923935.1_NDDB_SH_1_genomic.fna --in-fq /workdir/WGS/00.CleanData/xxx_1.clean.fq.gz /workdir/JAAS_Shenyy/WGS/00.CleanData/xxx_2.clean.fq.gz "@RG\tID:ID\tPL:ILLUMINA\tSM:xxx.clean.fq.gz\tPU:unit1\tLB:library" --out-bam /outputdir/xxx.bam
+
+#3 Complete bam to gvcf with Sailegene's WGS acceleration service
+/home/BIO_software/slc -R /mnt/data/ref_genome/water_buffalo/GCF_019923935.1_NDDB_SH_1_genomic.fna /mnt/data/WGS/bamfiles/xxx.sorted.markdup.bam -o /mnt/data/WGS/gvcffiles/xxx.gvcf.gz -e GVCF
+
+#4 gvcf to combine.vcf
+/home/BIO_software/slmgvcf_gpu xxx_gvcf.gz xxx1_gvcf.gz xxx2_gvcf.gz........ xxxn_gvcf.gz -g ./Xuyi_output.vcf.gz
+
+#Filter
+Please refer to the GATK hardfilter process.
