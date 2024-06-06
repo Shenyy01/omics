@@ -1,0 +1,51 @@
+# Load necessary R packages
+library(tidyverse)
+library(ropls)
+library(mixOmics)
+library(Hmisc)
+library(caret)
+library(igraph)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+
+# Load data
+data <- read.csv("metabolites_data.csv")  # Metabolites data
+qc_data <- read.csv("qc_data.csv")  # Quality control sample data
+
+# Data normalization (using QC samples)
+qc_means <- colMeans(qc_data)
+qc_sds <- apply(qc_data, 2, sd)
+data_scaled <- as.data.frame(scale(data, center = qc_means, scale = qc_sds))
+
+# Principal Component Analysis (PCA)
+pca_result <- prcomp(data_scaled, scale = TRUE)
+summary(pca_result)
+autoplot(pca_result, data = data, colour = 'Group', main = "PCA Plot")
+
+# OPLS-DA analysis
+group_factor <- as.factor(data$Group)
+oplsda_result <- opls(data_scaled, group_factor, predI = 1, orthoI = 1)
+plot(oplsda_result)
+
+# Correlation analysis
+correlation_matrix <- cor(data_scaled)
+heatmap(correlation_matrix, main = "Correlation Matrix Heatmap")
+
+# Univariate statistical analysis (e.g., t-test)
+results <- apply(data_scaled, 2, function(x) t.test(x ~ group_factor)$p.value)
+significant_metabolites <- names(results[results < 0.05])
+
+# Construct regression model (e.g., linear regression)
+model <- train(data_scaled, data$ResponseVariable, method = "lm")
+summary(model)
+
+# Network analysis
+network <- graph_from_adjacency_matrix(correlation_matrix > 0.7, mode = "undirected")
+plot(network, main = "Metabolite Network")
+
+# Pathway analysis
+# Map significant metabolites to Entrez gene IDs for pathway analysis
+# Here we assume the significant metabolites IDs are already Entrez gene IDs
+pathway_result <- enrichKEGG(gene = significant_metabolites, organism = 'hsa', keyType = 'kegg')
+pathway_result_df <- as.data.frame(pathway_result)
+write.csv(pathway_result_df, "pathway_analysis_results.csv")

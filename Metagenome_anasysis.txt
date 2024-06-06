@@ -1,0 +1,167 @@
+#1. Quality Control
+# Create directories
+mkdir -p quality_control kneaddata_output
+
+# Quality control using Kneaddata, which calls Trimmomatic and Bowtie2 to remove host data
+for sample in HZ{1..10}
+do
+    kneaddata --input ${sample}_R1.fastq.gz --input ${sample}_R2.fastq.gz \
+              --output kneaddata_output/${sample} \
+              --trimmomatic /path/to/trimmomatic \
+              --bowtie2 /path/to/bowtie2 \
+              --reference-db /path/to/host_genome \
+              --threads 16
+done
+
+#2. Genome Assembly
+# Create directories
+mkdir -p assembly/megahit assembly/metaspades
+
+# Genome assembly using MEGAHIT
+for sample in HZ{1..10}
+do
+    megahit -1 kneaddata_output/${sample}/${sample}_R1_kneaddata_paired_1.fastq \
+            -2 kneaddata_output/${sample}/${sample}_R2_kneaddata_paired_2.fastq \
+            -o assembly/megahit/${sample} \
+            --threads 16
+done
+
+# Genome assembly using MetaSPAdes
+for sample in HZ{1..10}
+do
+    metaspades.py -1 kneaddata_output/${sample}/${sample}_R1_kneaddata_paired_1.fastq \
+                  -2 kneaddata_output/${sample}/${sample}_R2_kneaddata_paired_2.fastq \
+                  -o assembly/metaspades/${sample} \
+                  --threads 16
+done
+
+#3. Gene Prediction
+# Create directories
+mkdir -p gene_prediction/metagenemark gene_prediction/cd-hit
+
+# Gene prediction using MetaGeneMark
+for sample in HZ{1..10}
+do
+    gmhmmp -a -d -f G -m MetaGeneMark_v1.mod -o gene_prediction/metagenemark/${sample}.gff \
+           assembly/metaspades/${sample}/contigs.fasta
+done
+
+# Constructing non-redundant gene sets using CD-HIT
+cat gene_prediction/metagenemark/*.gff > gene_prediction/all_genes.fasta
+cd-hit -i gene_prediction/all_genes.fasta -o gene_prediction/cd-hit/non_redundant_genes.fasta -c 0.95 -n 5 -T 16
+
+#4. Gene Function Prediction
+# Create directory
+mkdir -p gene_function_prediction
+
+# Functional annotation using BLAST against NR, COG, GO, KEGG, CAZY, ARDB databases
+blastp -query gene_prediction/cd-hit/non_redundant_genes.fasta -db nr -out gene_function_prediction/nr_annotation.txt -evalue 1e-5 -outfmt 6 -num_threads 16
+blastp -query gene_prediction/cd-hit/non_redundant_genes.fasta -db cog -out gene_function_prediction/cog_annotation.txt -evalue 1e-5 -outfmt 6 -num_threads 16
+blastp -query gene_prediction/cd-hit/non_redundant_genes.fasta -db go -out gene_function_prediction/go_annotation.txt -evalue 1e-5 -outfmt 6 -num_threads 16
+blastp -query gene_prediction/cd-hit/non_redundant_genes.fasta -db kegg -out gene_function_prediction/kegg_annotation.txt -evalue 1e-5 -outfmt 6 -num_threads 16
+blastp -query gene_prediction/cd-hit/non_redundant_genes.fasta -db cazy -out gene_function_prediction/cazy_annotation.txt -evalue 1e-5 -outfmt 6 -num_threads 16
+blastp -query gene_prediction/cd-hit/non_redundant_genes.fasta -db ardb -out gene_function_prediction/ardb_annotation.txt -evalue 1e-5 -outfmt 6 -num_threads 16
+
+#5.Gene Abundance Analysis
+#Alignment-Free Method
+# Create directory
+mkdir -p gene_abundance/salmon
+
+# Gene abundance analysis using Salmon
+for sample in HZ{1..10}
+do
+    salmon quant -i gene_prediction/cd-hit/non_redundant_genes.fasta \
+                 -l A -1 kneaddata_output/${sample}/${sample}_R1_kneaddata_paired_1.fastq \
+                 -2 kneaddata_output/${sample}/${sample}_R2_kneaddata_paired_2.fastq \
+                 -p 16 -o gene_abundance/salmon/${sample}
+done
+
+#Alignment-Based Method
+# Create directories
+mkdir -p gene_abundance/bwa gene_abundance/bedtools
+
+# Alignment using BWA and abundance calculation using Bedtools
+bwa index gene_prediction/cd-hit/non_redundant_genes.fasta
+
+for sample in HZ{1..10}
+do
+    bwa mem gene_prediction/cd-hit/non_redundant_genes.fasta \
+            kneaddata_output/${sample}/${sample}_R1_kneaddata_paired_1.fastq \
+            kneaddata_output/${sample}/${sample}_R2_kneaddata_paired_2.fastq \
+            | samtools view -bS - > gene_abundance/bwa/${sample}.bam
+
+    bedtools coverage -a gene_prediction/cd-hit/non_redundant_genes.fasta -b gene_abundance/bwa/${sample}.bam > gene_abundance/bedtools/${sample}_coverage.txt
+done
+
+#6. Functional Abundance Analysis
+# Functional abundance analysis using HUMAnN2
+mkdir -p functional_abundance/humann2
+
+for sample in HZ{1..10}
+do
+    humann2 --input kneaddata_output/${sample}/${sample}_R1_kneaddata_paired_1.fastq \
+            --output functional_abundance/humann2/${sample} \
+            --threads 16
+done
+
+#7.Species Abundance Analysis
+#Using MetaPhlAn2
+# Species abundance analysis using MetaPhlAn2
+mkdir -p species_abundance/metaphlan2
+
+for sample in HZ{1..10}
+do
+    metaphlan2.py kneaddata_output/${sample}/${sample}_R1_kneaddata_paired_1.fastq,kneaddata_output/${sample}/${sample}_R2_kneaddata_paired_2.fastq \
+                  --input_type fastq --nproc 16 --bowtie2out species_abundance/metaphlan2/${sample}.bowtie2.bz2 \
+                  > species_abundance/metaphlan2/${sample}_profile.txt
+done
+
+#Using Kraken2
+# Species abundance analysis using Kraken2
+mkdir -p species_abundance/kraken2
+
+for sample in HZ{1..10}
+do
+    kraken2 --db /path/to/kraken2_db --paired kneaddata_output/${sample}/${sample}_R1_kneaddata_paired_1.fastq \
+            kneaddata_output/${sample}/${sample}_R2_kneaddata_paired_2.fastq \
+            --threads 16 --output species_abundance/kraken2/${sample}_kraken2_output.txt \
+            --report species_abundance/kraken2/${sample}_kraken2_report.txt
+done
+
+#8.Differential Statistical Analysis （in R）
+# Load necessary libraries
+library(DESeq2)
+library(phyloseq)
+library(ggplot2)
+library(vegan)
+library(STAMP)
+
+# Example data import (assuming you have abundance matrices in appropriate format)
+gene_abundance <- read.table("gene_abundance_matrix.txt", header=TRUE, row.names=1)
+species_abundance <- read.table("species_abundance_matrix.txt", header=TRUE, row.names=1)
+functional_abundance <- read.table("functional_abundance_matrix.txt", header=TRUE, row.names=1)
+
+# Sample information (metadata)
+sample_info <- read.table("sample_info.txt", header=TRUE, row.names=1)
+
+# Example of differential analysis for gene abundance
+dds <- DESeqDataSetFromMatrix(countData = gene_abundance, colData = sample_info, design = ~ condition)
+dds <- DESeq(dds)
+res <- results(dds)
+resOrdered <- res[order(res$padj),]
+write.csv(as.data.frame(resOrdered), file="gene_abundance_diff_analysis.csv")
+
+# Differential analysis for species abundance using phyloseq and DESeq2
+ps <- phyloseq(otu_table(species_abundance, taxa_are_rows=TRUE), sample_data(sample_info))
+ps_dds <- phyloseq_to_deseq2(ps, ~ condition)
+ps_dds <- DESeq(ps_dds)
+res_ps <- results(ps_dds)
+resOrdered_ps <- res_ps[order(res_ps$padj),]
+write.csv(as.data.frame(resOrdered_ps), file="species_abundance_diff_analysis.csv")
+
+# Differential analysis for functional abundance using STAMP
+# Assuming functional_abundance_matrix.txt is in the required STAMP format
+functional_abundance_stamp <- read.delim("functional_abundance_matrix.txt")
+stamp_analysis <- test_diff(funcTable = functional_abundance_stamp, groupColumn = "condition", test = "Two-sided Welch’s t-test", CI = 0.95)
+write.csv(as.data.frame(stamp_analysis), file="functional_abundance_diff_analysis.csv")
+
